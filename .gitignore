@@ -1,0 +1,5 @@
+.DS_Store
+.venv/
+__pycache__/
+inventory.sqlite3*
+CP5401_Assessment3.pdf
