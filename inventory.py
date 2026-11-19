@@ -43,6 +43,18 @@ class Inventory:
                 """
             )
             connection.execute("BEGIN IMMEDIATE")
+            columns = {column["name"] for column in connection.execute("PRAGMA table_info(items)")}
+            if "replenishment_threshold" not in columns:
+                connection.execute(
+                    """
+                    ALTER TABLE items ADD COLUMN replenishment_threshold INTEGER
+                    CHECK (
+                        replenishment_threshold IS NULL OR (
+                            typeof(replenishment_threshold) = 'integer' AND replenishment_threshold >= 0
+                        )
+                    )
+                    """
+                )
             if connection.execute("SELECT 1 FROM items LIMIT 1").fetchone() is None:
                 connection.executemany(
                     "INSERT INTO items (name, quantity) VALUES (?, ?)", DEMO_ITEMS
@@ -57,7 +69,7 @@ class Inventory:
     def list_items(self) -> list[sqlite3.Row]:
         with self._connect() as connection:
             return connection.execute(
-                "SELECT id, name, quantity FROM items ORDER BY name"
+                "SELECT id, name, quantity, replenishment_threshold FROM items ORDER BY name"
             ).fetchall()
 
     def add_item(self, name: str) -> None:
@@ -72,6 +84,27 @@ class Inventory:
             )
             if result.rowcount == 0:
                 raise InventoryError("An item with that name already exists.")
+
+    def set_replenishment_threshold(self, item_id: int, threshold: int | str) -> int:
+        threshold = _whole_quantity(threshold, minimum=0, field="replenishment threshold")
+        with self._connect() as connection:
+            result = connection.execute(
+                "UPDATE items SET replenishment_threshold = ? WHERE id = ?",
+                (threshold, item_id),
+            )
+            if result.rowcount == 0:
+                raise InventoryError("That item could not be found.")
+        return threshold
+
+    def list_low_stock_items(self) -> list[sqlite3.Row]:
+        with self._connect() as connection:
+            return connection.execute(
+                """
+                SELECT name, quantity, replenishment_threshold FROM items
+                WHERE replenishment_threshold IS NOT NULL AND quantity <= replenishment_threshold
+                ORDER BY name
+                """
+            ).fetchall()
 
     def list_movements(self) -> list[sqlite3.Row]:
         with self._connect() as connection:
@@ -90,7 +123,7 @@ class Inventory:
         return self._record_movement(item_id, quantity, "Withdrawal")
 
     def _record_movement(self, item_id: int, quantity: int | str, kind: str) -> int:
-        quantity = _positive_quantity(quantity)
+        quantity = _whole_quantity(quantity)
 
         with self._connect() as connection:
             # Keep another submission from changing the balance before this one commits.
@@ -118,8 +151,9 @@ class Inventory:
             return new_quantity
 
 
-def _positive_quantity(value: int | str) -> int:
-    error = "Enter a positive whole number for the quantity."
+def _whole_quantity(value: int | str, *, minimum: int = 1, field: str = "quantity") -> int:
+    requirement = "positive" if minimum == 1 else "non-negative"
+    error = f"Enter a {requirement} whole number for the {field}."
     if isinstance(value, str):
         value = value.strip()
         if not value.isascii() or not value.isdecimal():
@@ -129,8 +163,8 @@ def _positive_quantity(value: int | str) -> int:
         except ValueError:
             raise InventoryError(error) from None
 
-    if type(value) is not int or value < 1:
+    if type(value) is not int or value < minimum:
         raise InventoryError(error)
     if value > MAX_QUANTITY:
-        raise InventoryError("The quantity is too large.")
+        raise InventoryError(f"The {field} is too large.")
     return value
