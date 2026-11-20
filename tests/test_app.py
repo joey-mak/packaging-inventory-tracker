@@ -73,6 +73,31 @@ class InventoryAppTests(unittest.TestCase):
         self.assertEqual(last_movement["Movement"], "Receipt")
         self.assertEqual(last_movement["Quantity"], 12)
 
+    def test_manager_sees_replenishment_list_update_after_receipt(self):
+        paper_cups = next(item for item in self.inventory.list_items() if item["name"] == "Paper Cups")
+        self.inventory.withdraw_stock(paper_cups["id"], 7)
+        self.app.radio[0].set_value("Shift manager").run()
+        self.assertFalse(self.app.exception)
+
+        threshold_item = next(field for field in self.app.selectbox if field.label == "Packaging item")
+        threshold_item.set_value(paper_cups["id"])
+        threshold = next(field for field in self.app.text_input if field.label == "Replenishment threshold")
+        threshold.set_value("3")
+        self.submit("Save threshold")
+        self.assertEqual(
+            self.app.table[0].value.to_dict("records"),
+            [{"Item": "Paper Cups", "Units on hand": 3, "Threshold": 3}],
+        )
+
+        self.app.selectbox[0].set_value(paper_cups["id"])
+        quantity = next(field for field in self.app.text_input if field.label == "Quantity")
+        quantity.set_value("1")
+        self.submit("Record receipt")
+
+        self.assertEqual(self.displayed_stock("Paper Cups"), 4)
+        self.assertFalse(self.app.table)
+        self.assertEqual(self.app.info[0].value, "No items are at or below their configured threshold.")
+
 
 if __name__ == "__main__":
     unittest.main()
